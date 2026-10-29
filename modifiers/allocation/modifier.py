@@ -23,6 +23,8 @@ class AllocOpt(Enum):
     OMP_NUM_THREADS = 8
     PBS_MIN_NCPUS_PER_NODE = 9
     PBS_EMIT_GPUS = 10
+    PBS_CHUNK_RESOURCES = 11  # e.g. "cpu_type=genoa", appended to select chunk
+    PBS_PLACE = 12  # e.g. "excl"
 
     # Descriptions of resources available on systems
     SYS_GPUS_PER_NODE = 100
@@ -55,6 +57,8 @@ class AllocOpt(Enum):
             AllocOpt.POST_EXEC_CMDS,
             AllocOpt.PRE_EXEC_CMDS,
             AllocOpt.BANK,
+            AllocOpt.PBS_CHUNK_RESOURCES,
+            AllocOpt.PBS_PLACE,
         ]:
             return str(input)
         else:
@@ -569,10 +573,16 @@ class Allocation(BasicModifier):
             gpus_per_rank = self.gpus_as_gpus_per_rank(v)
             node_spec.append(f"gpus={gpus_per_rank}")
 
+        if v.pbs_chunk_resources:
+            node_spec.append(v.pbs_chunk_resources)
+
         if node_spec:
             batch_opts.append(f"-l {':'.join(node_spec)}")
         else:
             raise ValueError("Not enough information to select resources")
+
+        if v.pbs_place:
+            batch_opts.append(f"-l place={v.pbs_place}")
 
         if v.queue:
             batch_opts.append(f"-q {v.queue}")

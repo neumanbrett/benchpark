@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 import sys
 from typing import Dict
 
@@ -605,8 +606,23 @@ class Experiment(ExperimentSystemBase, ExecMode, Affinity, Hwloc, Githash):
                 "PATH", self.spec.variants["prepend_path"][0]
             )
 
+        # NCAR fork: systems that provide a module stack translate Spack-style
+        # specs into module names. Ramble keeps an environment's packages in a
+        # set (unordered), so each spec carries the full ordered stack and is
+        # emitted as a single `module load ncarenv/.. <compiler> <mpi> <app>`.
+        packages = {k: v for k, v in self.package_specs.items() if v}
+        system = getattr(getattr(self, "system_spec", None), "system", None)
+        if pkg_manager == "environment-modules" and hasattr(system, "module_stack"):
+            pkg_key = "environment_modules_pkg_spec"
+            stack = system.module_stack()
+            for name, spec in packages.items():
+                if pkg_key in spec:
+                    pkg_name = re.match(r"\s*([\w-]+)", spec[pkg_key]).group(1)
+                    module = system.module_for(pkg_name)
+                    packages[name] = spec | {pkg_key: " ".join(stack + [module])}
+
         return {
-            "packages": {k: v for k, v in self.package_specs.items() if v},
+            "packages": packages,
             "environments": {self.name: {"packages": list(self.package_specs.keys())}},
         }
 
