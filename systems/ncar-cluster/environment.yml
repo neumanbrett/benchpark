@@ -1,0 +1,23 @@
+name: benchpark
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pyyaml
+  - deepdiff
+  - pytest
+  - flake8
+  - xmltodict
+  - coverage
+  - pytest-cov
+  - pre-commit
+  - google-cloud-storage
+  - google-api-core
+  - protobuf
+  - google-cloud-bigquery
+  - tqdm
+  - deprecation
+  - pandas
+  - matplotlib
+  - setuptools
+  - scipy

@@ -25,6 +25,7 @@ class AllocOpt(Enum):
     PBS_EMIT_GPUS = 10
     PBS_CHUNK_RESOURCES = 11  # e.g. "cpu_type=genoa", appended to select chunk
     PBS_PLACE = 12  # e.g. "excl"
+    PBS_EMIT_NGPUS = 13  # 1: request GPUs per chunk as ngpus=<GPUs per node>
 
     # Descriptions of resources available on systems
     SYS_GPUS_PER_NODE = 100
@@ -569,9 +570,13 @@ class Allocation(BasicModifier):
 
         node_spec.append(f"ncpus={n_cpus_per_node}")
 
-        if v.n_gpus and v.pbs_emit_gpus != 0:
+        # pbs_emit_ngpus replaces the per-rank gpus= request (Casper rejects it).
+        if v.n_gpus and v.pbs_emit_gpus != 0 and not v.pbs_emit_ngpus:
             gpus_per_rank = self.gpus_as_gpus_per_rank(v)
             node_spec.append(f"gpus={gpus_per_rank}")
+
+        if v.n_gpus and v.pbs_emit_ngpus:
+            node_spec.append(f"ngpus={math.ceil(v.n_gpus / v.n_nodes)}")
 
         if v.pbs_chunk_resources:
             node_spec.append(v.pbs_chunk_resources)

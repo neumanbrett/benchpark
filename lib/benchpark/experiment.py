@@ -5,7 +5,7 @@
 
 import re
 import sys
-from typing import Dict
+from typing import Dict, List
 
 import ramble.language.language_base  # noqa
 import ramble.language.language_helpers  # noqa
@@ -223,6 +223,12 @@ class Experiment(ExperimentSystemBase, ExecMode, Affinity, Hwloc, Githash):
         "benchpark.spec.Spec",
         Dict[str, benchpark.variant.Variant],
     ]
+
+    # NCAR fork, environment-modules mode on systems with a module stack:
+    # library modules (by name) to load after the compiler/MPI stack, and
+    # whether the app is built by NCT (no module; run from its install dir).
+    module_libraries: List[str] = []
+    nct_built = False
 
     variant(
         "package_manager",
@@ -614,12 +620,15 @@ class Experiment(ExperimentSystemBase, ExecMode, Affinity, Hwloc, Githash):
         system = getattr(getattr(self, "system_spec", None), "system", None)
         if pkg_manager == "environment-modules" and hasattr(system, "module_stack"):
             pkg_key = "environment_modules_pkg_spec"
-            stack = system.module_stack()
+            stack = system.module_stack() + system.library_modules_for(
+                self.module_libraries
+            )
             for name, spec in packages.items():
                 if pkg_key in spec:
                     pkg_name = re.match(r"\s*([\w-]+)", spec[pkg_key]).group(1)
-                    module = system.module_for(pkg_name)
-                    packages[name] = spec | {pkg_key: " ".join(stack + [module])}
+                    # NCT-built apps have no module; Ramble runs them by path.
+                    app = [] if self.nct_built else [system.module_for(pkg_name)]
+                    packages[name] = spec | {pkg_key: " ".join(stack + app)}
 
         return {
             "packages": packages,
