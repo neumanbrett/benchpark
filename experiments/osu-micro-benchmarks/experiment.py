@@ -110,6 +110,14 @@ class OsuMicroBenchmarks(
         description="app version",
     )
 
+    # NCAR fork: 2-rank workloads only; 1 = intra-node, 2 = inter-node.
+    variant(
+        "n_nodes",
+        default="both",
+        values=("both", "1", "2"),
+        description="Node count for 2-rank workloads (1: intra-node, 2: inter-node)",
+    )
+
     maintainers("nhanford")
 
     def compute_applications_section(self):
@@ -135,8 +143,10 @@ class OsuMicroBenchmarks(
                     "This experiment must contain eithor only 2-rank workloads or only scalable workloads."
                 )
             # Test the intra-node case and the inter-node case. Ignore user-set scaling params.
-            self.add_experiment_variable(resource_var, [2, 2], True)
-            self.add_experiment_variable("n_nodes", [1, 2], True)
+            choice = self.spec.variants["n_nodes"][0]
+            n_nodes = [1, 2] if choice == "both" else [int(choice)]
+            self.add_experiment_variable(resource_var, [2] * len(n_nodes), True)
+            self.add_experiment_variable("n_nodes", n_nodes, True)
             self.add_experiment_variable("scaling-iterations", 1, True)
         else:
             sys = self.system_spec.system

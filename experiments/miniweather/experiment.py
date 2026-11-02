@@ -69,8 +69,8 @@ class Miniweather(
     variant(
         "size",
         default="test",
-        values=("test", "perf"),
-        description="test: 100x50, 400 s (correctness); perf: 2000x1000, 100 s",
+        values=("test", "baseline"),
+        description="test: 100x50, 400 s (correctness); baseline: 2000x1000, 400 s",
     )
 
     variant(
@@ -105,6 +105,11 @@ class Miniweather(
         if exe not in self.build_executables[build]:
             raise BenchparkError(
                 f"build={build} has exe in {self.build_executables[build]}, not {exe}"
+            )
+        cuda_arch = getattr(self.system_spec.system, "cuda_arch", None)
+        if gpu and exe == "openmp45" and int(cuda_arch) < 70:
+            raise BenchparkError(
+                f"exe=openmp45 needs a GPU with cc >= 70 (this profile is cc{cuda_arch})"
             )
         if exe == "serial" and (n_nodes != [1] or ranks_per_node != 1):
             raise BenchparkError("exe=serial needs n_nodes=1 ranks_per_node=1")

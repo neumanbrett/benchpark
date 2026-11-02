@@ -243,13 +243,22 @@ class NcarCluster(System):
     variant(
         "mem",
         default="default",
-        description="Memory per node in GB for the select chunk (default: PBS's 10gb)",
+        description="Memory per node in GB for the select chunk (default: the whole "
+        "node's with +exclusive, else PBS's 10gb)",
+    )
+
+    variant(
+        "reservation",
+        default="none",
+        description="PBS reservation ID (e.g. R6430662) to submit to instead of the "
+        "routing queue; the node profile must match the reserved nodes",
     )
 
     variant(
         "exclusive",
         default=True,
-        description="Request whole nodes (place=excl); required for performance baselines",
+        description="Request whole nodes (place=scatter:excl); required for "
+        "performance baselines",
     )
 
     variant(
@@ -314,7 +323,11 @@ class NcarCluster(System):
     def compute_variables_section(self):
         section = super().compute_variables_section()
         variables = section["variables"]
-        if variables.get("queue") in (None, *(q.name for q in self.queues)):
+        reservation = self.spec.variants["reservation"][0]
+        if reservation != "none":
+            # A reservation is its own queue (qsub -q R<id>), covering only its nodes.
+            variables["queue"] = reservation
+        elif variables.get("queue") in (None, *(q.name for q in self.queues)):
             variables["queue"] = self.routing_queues[self.spec.variants["cluster"][0]]
         return section
 
@@ -328,11 +341,17 @@ class NcarCluster(System):
             chunk.append(f"gpu_type={self.gpu_type}")
             variables["pbs_emit_ngpus"] = 1
         mem = self.spec.variants["mem"][0]
+        # PBS caps a job at its requested mem even on an exclusive node.
+        if mem == "default" and self.spec.satisfies("+exclusive"):
+            mem = self.sys_mem_per_node_GB
         if mem != "default":
             chunk.append(f"mem={int(mem)}GB")
         variables["pbs_chunk_resources"] = ":".join(chunk)
-        if self.spec.satisfies("+exclusive"):
-            variables["pbs_place"] = "excl"
+        # One chunk per node: plain excl lets PBS pack chunks that fit onto one host,
+        # so an n_nodes=2 job could run on a single node.
+        variables["pbs_place"] = (
+            "scatter:excl" if self.spec.satisfies("+exclusive") else "scatter"
+        )
         # Keep PBS output with the experiment (not in the qsub cwd) and record
         # which job/hosts produced the result.
         variables["extra_batch_opts"] = "-j oe\n-o {experiment_run_dir}/pbs_job.out"

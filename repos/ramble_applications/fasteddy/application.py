@@ -42,8 +42,11 @@ class Fasteddy(ExecutableApplication):
         use_mpi=False,
     )
     executable("run", "{nct_app_dir}/bin/FastEddy fasteddy.in", use_mpi=True)
+    # NCT keeps only pass/fail and timings (both in the log); the final state dump
+    # is ~6 GB per run, so drop it once the run ends.
+    executable("cleanup", "rm -rf output", use_mpi=False)
 
-    workload("fasteddy", executables=["prepare", "run"])
+    workload("fasteddy", executables=["prepare", "run", "cleanup"])
 
     workload_variable(
         "nct_app_dir",
