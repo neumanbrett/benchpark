@@ -118,6 +118,15 @@ class Miniweather(
             raise BenchparkError(
                 f"GPU build: ranks_per_node (one GPU each) must be <= {gpus}"
             )
+        # miniWeather splits nx (compiled in: test 100, baseline 2000) across ranks, and
+        # each rank needs at least the halo width (2) of columns; below that it doesn't
+        # conserve mass (2026-11-03: drift at 62-64 ranks, NaN at 128).
+        nx = 100 if self.spec.satisfies("size=test") else 2000
+        if ranks_per_node * max(n_nodes) > nx // 2:
+            raise BenchparkError(
+                f"miniWeather size={self.spec.variants['size'][0]} (nx={nx}) runs at "
+                f"most {nx // 2} ranks (2 columns each)"
+            )
 
         suffix = "_test" if self.spec.satisfies("size=test") else ""
         self.add_experiment_variable("nct_app_dir", app_dir)

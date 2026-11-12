@@ -118,6 +118,15 @@ class OsuMicroBenchmarks(
         description="Node count for 2-rank workloads (1: intra-node, 2: inter-node)",
     )
 
+    # NCAR fork: scalable workloads fill the node with ranks; on SMT nodes (MI300A:
+    # 192 cpus = 96 cores x 2) use threads_per_rank=2 so each rank gets a whole core
+    # (OpenMPI binds to cores and refuses more ranks than cores).
+    variant(
+        "threads_per_rank",
+        default="1",
+        description="cpus per rank for scalable workloads (ranks = cores / this)",
+    )
+
     maintainers("nhanford")
 
     def compute_applications_section(self):
@@ -127,10 +136,20 @@ class OsuMicroBenchmarks(
             for pk, pv in num_nodes.items():
                 self.add_experiment_variable(pk, pv, True)
 
+        device = None
         if self.spec.satisfies("+rocm"):
-            self.add_experiment_variable("additional_args", " -d rocm", False)
+            device = "rocm"
         if self.spec.satisfies("+cuda"):
-            self.add_experiment_variable("additional_args", " -d cuda", False)
+            device = "cuda"
+        if device:
+            # NCAR fork: OSU's point-to-point tests keep both buffers in host memory
+            # unless given "D D", even with -d (c/util/osu_util.c). Collectives take
+            # no buffer arguments.
+            two_rank = any(
+                self.spec.satisfies(f"workload={wl}") for wl in self.two_rank_workloads
+            )
+            args = f" -d {device}" + (" D D" if two_rank else "")
+            self.add_experiment_variable("additional_args", args, False)
 
         use_gpus = self.spec.satisfies("+cuda") or self.spec.satisfies("+rocm")
         resource_var = "n_gpus" if use_gpus else "n_ranks"
@@ -151,10 +170,13 @@ class OsuMicroBenchmarks(
         else:
             sys = self.system_spec.system
             # "Fill" the nodes with ranks, and scale according to user parameters.
+            threads = int(self.spec.variants["threads_per_rank"][0])
             resources_per_node = (
-                sys.sys_gpus_per_node if use_gpus else sys.sys_cores_per_node
+                sys.sys_gpus_per_node if use_gpus else sys.sys_cores_per_node // threads
             )
             self.add_experiment_variable(resource_var, resources_per_node, True)
+            if threads != 1:
+                self.add_experiment_variable("n_threads_per_proc", threads, True)
             self.add_experiment_variable("n_nodes", 1, True)
         self.register_scaling_config(
             {

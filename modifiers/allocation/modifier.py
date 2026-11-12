@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import re
 from enum import Enum
 
 import ramble.config
@@ -26,6 +27,8 @@ class AllocOpt(Enum):
     PBS_CHUNK_RESOURCES = 11  # e.g. "cpu_type=genoa", appended to select chunk
     PBS_PLACE = 12  # e.g. "excl"
     PBS_EMIT_NGPUS = 13  # 1: request GPUs per chunk as ngpus=<GPUs per node>
+    PBS_MIN_NGPUS_PER_NODE = 14  # ngpus for jobs that request no GPUs (0: none)
+    PBS_JOB_NAME = 15  # PBS -N (default: <application>.<workload>)
 
     # Descriptions of resources available on systems
     SYS_GPUS_PER_NODE = 100
@@ -60,6 +63,7 @@ class AllocOpt(Enum):
             AllocOpt.BANK,
             AllocOpt.PBS_CHUNK_RESOURCES,
             AllocOpt.PBS_PLACE,
+            AllocOpt.PBS_JOB_NAME,
         ]:
             return str(input)
         else:
@@ -577,6 +581,10 @@ class Allocation(BasicModifier):
 
         if v.n_gpus and v.pbs_emit_ngpus:
             node_spec.append(f"ngpus={math.ceil(v.n_gpus / v.n_nodes)}")
+        elif v.pbs_min_ngpus_per_node:
+            # NCAR fork: a GPU node's queue may require GPUs even for a CPU-only job
+            # (Casper routes a job without ngpus to a CPU queue).
+            node_spec.append(f"ngpus={v.pbs_min_ngpus_per_node}")
 
         if v.pbs_chunk_resources:
             node_spec.append(v.pbs_chunk_resources)
@@ -597,6 +605,16 @@ class Allocation(BasicModifier):
 
         if v.bank:
             batch_opts.append(f"-A {v.bank}")
+
+        # NCAR fork: a job name that says what runs. PBS takes up to 236 characters,
+        # alphanumerics and . _ -, starting with a letter.
+        name = v.pbs_job_name or self.expander.expand_var(
+            "{application_name}.{workload_name}"
+        )
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+        if not name[:1].isalpha():
+            name = "j" + name
+        batch_opts.append(f"-N {name[:236]}")
 
         batch_directives = list(f"#PBS {x}" for x in batch_opts)
 

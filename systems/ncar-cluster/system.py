@@ -41,7 +41,9 @@ class NcarCluster(System):
                 "cpu_arch": "cascadelake",
                 "pbs_cpu_type": "cascadelake",
                 "sys_cores_per_node": 34,
-                "sys_mem_per_node_GB": 354,
+                # 300, not 354: one node has 329 GB (pbsnodes 2026-11-02), and a
+                # full-node request must fit every node of the profile.
+                "sys_mem_per_node_GB": 300,
                 "queues": [JobQueue("htc", 1440, 48)],
             },
             "htc-genoa": {
@@ -162,7 +164,9 @@ class NcarCluster(System):
                 "rocm_arch": "gfx942",
                 "sys_cores_per_node": 192,
                 "sys_gpus_per_node": 4,
-                "sys_mem_per_node_GB": 496,
+                # 480, not 496: PBS GB is 1024^3, and 496GB (520,093,696 kb) is just
+                # over casper60's 520,064,476 kb (2026-11-03).
+                "sys_mem_per_node_GB": 480,
                 "gpu_type": "mi300a",
                 "queues": [JobQueue("amdgpu", 1440, 2)],
             },
@@ -208,6 +212,10 @@ class NcarCluster(System):
             ("intel", "openmpi"): ["intel/2025.2.1", "openmpi/5.0.8"],
             ("nvhpc", "openmpi"): ["nvhpc/25.9", "openmpi/5.0.8"],
         },
+        # AMD GPU nodes only: ROCm-aware OpenMPI (no parallel-netcdf in this stack).
+        "25.10-rocm": {
+            ("gcc", "openmpi"): ["gcc/14.3.0", "openmpi/5.0.9"],
+        },
     }
 
     # Library modules an experiment can request by name, loaded after the
@@ -218,11 +226,17 @@ class NcarCluster(System):
             "netcdf": "netcdf/4.9.3",
             "parallel-netcdf": "parallel-netcdf/1.14.1",
         },
+        "25.10-rocm": {
+            "rocm": "rocm/6.4.3",
+        },
     }
 
     # Application package name -> module, per ncarenv version.
     app_modules = {
         "25.10": {
+            "osu-micro-benchmarks": "osu-micro-benchmarks/7.5.1",
+        },
+        "25.10-rocm": {
             "osu-micro-benchmarks": "osu-micro-benchmarks/7.5.1",
         },
     }
@@ -236,7 +250,7 @@ class NcarCluster(System):
     variant(
         "ncarenv",
         default="25.10",
-        values=("25.10",),
+        values=("25.10", "25.10-rocm"),
         description="ncarenv module version to load for environment-modules runs",
     )
 
@@ -278,9 +292,10 @@ class NcarCluster(System):
     variant(
         "queue",
         default="none",
-        values=("none", "htc", "largemem", "vis", "nvgpu", "amdgpu"),
+        values=("none", "htc", "largemem", "vis", "nvgpu", "amdgpu", "system"),
         multi=False,
-        description="PBS queue to submit to (defaults to the node profile's queue)",
+        description="PBS queue to submit to (defaults to the node profile's queue); "
+        "system: the maintenance queue (submitted to directly, not routed)",
     )
 
     def __init__(self, spec):
@@ -300,18 +315,30 @@ class NcarCluster(System):
             )
         for k, v in attrs.items():
             setattr(self, k, v)
+        if self.spec.variants["queue"][0] == "system":
+            # Same limits as the profile's own queue (the base class looks the name up).
+            q = self.queues[0]
+            self.queues = [*self.queues, JobQueue("system", q.time_limit, q.max_nodes)]
 
         # Programming models depend on the selected node.
+        ncarenv = self.spec.variants["ncarenv"][0]
+        rocm_stack = "rocm" in self.library_modules[ncarenv]
+        if rocm_stack != node.startswith("amdgpu-"):
+            raise ValueError(
+                f"ncarenv={ncarenv} doesn't fit node={node}: use ncarenv=25.10-rocm "
+                "on AMD GPU nodes only"
+            )
         pms = [OpenMPCPUOnlySystem()]
         if node.startswith("nvgpu-") or node.startswith("vis-"):
             pms.append(CudaSystem())
             # CudaSystem needs these; CUDA comes from the ncarenv module and
             # there is no Cray GTL on Casper.
-            ncarenv = self.spec.variants["ncarenv"][0]
             self.cuda_version = self.library_modules[ncarenv]["cuda"].split("/")[1]
             self.gtl_flag = False
         elif node.startswith("amdgpu-"):
             pms.append(ROCmSystem())
+            self.rocm_version = self.library_modules[ncarenv]["rocm"].split("/")[1]
+            self.gtl_flag = False
         self.programming_models = pms
 
         self.scheduler = "pbs"
@@ -319,6 +346,9 @@ class NcarCluster(System):
     # Execution queues (htc, nvgpu, ...) are from_route_only; jobs must be
     # submitted to the cluster's routing queue, which places them by resources.
     routing_queues = {"casper": "casper"}
+    # Per-job ngpus limits of the GPU execution queues (qstat -Qf, 2026-11-02):
+    # vis takes exactly 1, amdgpu 4-8, nvgpu 1-32.
+    min_ngpus = {"vis": 1, "nvgpu": 1, "amdgpu": 4}
 
     def compute_variables_section(self):
         section = super().compute_variables_section()
@@ -327,6 +357,9 @@ class NcarCluster(System):
         if reservation != "none":
             # A reservation is its own queue (qsub -q R<id>), covering only its nodes.
             variables["queue"] = reservation
+        elif self.spec.variants["queue"][0] == "system":
+            # Not route-only; reaches nodes the routing queue can't during maintenance.
+            variables["queue"] = "system"
         elif variables.get("queue") in (None, *(q.name for q in self.queues)):
             variables["queue"] = self.routing_queues[self.spec.variants["cluster"][0]]
         return section
@@ -340,6 +373,11 @@ class NcarCluster(System):
             # Casper chunks take ngpus=<per node> + gpu_type, not gpus=<per rank>.
             chunk.append(f"gpu_type={self.gpu_type}")
             variables["pbs_emit_ngpus"] = 1
+            # A job without ngpus is routed to a CPU queue, where no node has this
+            # gpu_type; the amdgpu queue also takes whole nodes only (ngpus >= 4).
+            variables["pbs_min_ngpus_per_node"] = self.min_ngpus.get(
+                self.queues[0].name, 1
+            )
         mem = self.spec.variants["mem"][0]
         # PBS caps a job at its requested mem even on an exclusive node.
         if mem == "default" and self.spec.satisfies("+exclusive"):

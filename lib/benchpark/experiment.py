@@ -255,6 +255,13 @@ class Experiment(ExperimentSystemBase, ExecMode, Affinity, Hwloc, Githash):
         description="Number of experiment repetitions",
     )
 
+    # NCAR fork: the batch job's name (PBS -N), e.g. job_name=osu-coll.mi300a from NCT.
+    variant(
+        "job_name",
+        default="auto",
+        description="Batch job name (auto: <application>.<workload>)",
+    )
+
     variant(
         "allocation",
         default="standard",
@@ -481,6 +488,15 @@ class Experiment(ExperimentSystemBase, ExecMode, Affinity, Hwloc, Githash):
             self.add_experiment_variable(self.name + "_path", "None")
 
         self.compute_applications_section()
+
+        # NCAR fork: the allocation modifier's job name. Several workloads in one
+        # experiment each get a job, so the name says which (Ramble expands it per job).
+        job_name = self.spec.variants["job_name"][0]
+        if job_name != "auto":
+            workloads = self.spec.variants.get("workload", [])
+            if len(workloads) > 1:
+                job_name += ".{workload_name}"
+            self.add_experiment_variable("pbs_job_name", job_name)
 
         if any([self.spec.satisfies(s) for s in ["+strong", "+weak", "+throughput"]]):
             self.expr_vars.extend(self.scale())
