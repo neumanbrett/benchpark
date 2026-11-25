@@ -110,12 +110,13 @@ class OsuMicroBenchmarks(
         description="app version",
     )
 
-    # NCAR fork: 2-rank workloads only; 1 = intra-node, 2 = inter-node.
+    # NCAR fork: 2-rank workloads: both, 1 (intra-node) or 2 (inter-node);
+    # scalable workloads (collectives): any node count, the nodes filled with ranks.
     variant(
         "n_nodes",
         default="both",
-        values=("both", "1", "2"),
-        description="Node count for 2-rank workloads (1: intra-node, 2: inter-node)",
+        description="2-rank workloads: both, 1 (intra-node) or 2 (inter-node); "
+        "scalable workloads: the node count (both: 1)",
     )
 
     # NCAR fork: scalable workloads fill the node with ranks; on SMT nodes (MI300A:
@@ -163,6 +164,8 @@ class OsuMicroBenchmarks(
                 )
             # Test the intra-node case and the inter-node case. Ignore user-set scaling params.
             choice = self.spec.variants["n_nodes"][0]
+            if choice not in ("both", "1", "2"):
+                raise BenchparkError("2-rank workloads take n_nodes=both, 1 or 2")
             n_nodes = [1, 2] if choice == "both" else [int(choice)]
             self.add_experiment_variable(resource_var, [2] * len(n_nodes), True)
             self.add_experiment_variable("n_nodes", n_nodes, True)
@@ -174,10 +177,12 @@ class OsuMicroBenchmarks(
             resources_per_node = (
                 sys.sys_gpus_per_node if use_gpus else sys.sys_cores_per_node // threads
             )
-            self.add_experiment_variable(resource_var, resources_per_node, True)
+            choice = self.spec.variants["n_nodes"][0]
+            nodes = 1 if choice == "both" else int(choice)
+            self.add_experiment_variable(resource_var, resources_per_node * nodes, True)
             if threads != 1:
                 self.add_experiment_variable("n_threads_per_proc", threads, True)
-            self.add_experiment_variable("n_nodes", 1, True)
+            self.add_experiment_variable("n_nodes", nodes, True)
         self.register_scaling_config(
             {
                 ScalingMode.Strong: {

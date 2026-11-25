@@ -29,6 +29,8 @@ class AllocOpt(Enum):
     PBS_EMIT_NGPUS = 13  # 1: request GPUs per chunk as ngpus=<GPUs per node>
     PBS_MIN_NGPUS_PER_NODE = 14  # ngpus for jobs that request no GPUs (0: none)
     PBS_JOB_NAME = 15  # PBS -N (default: <application>.<workload>)
+    PBS_MPIEXEC_PPN = 16  # 1: mpiexec -n <ranks> --ppn <per node> (Cray PALS)
+    PBS_MPIEXEC_WRAPPER = 17  # command each rank runs the app through (set_gpu_rank)
 
     # Descriptions of resources available on systems
     SYS_GPUS_PER_NODE = 100
@@ -64,6 +66,7 @@ class AllocOpt(Enum):
             AllocOpt.PBS_CHUNK_RESOURCES,
             AllocOpt.PBS_PLACE,
             AllocOpt.PBS_JOB_NAME,
+            AllocOpt.PBS_MPIEXEC_WRAPPER,
         ]:
             return str(input)
         else:
@@ -557,8 +560,15 @@ class Allocation(BasicModifier):
         node_spec = [f"select={v.n_nodes}"]
         node_spec.append(f"mpiprocs={v.n_ranks_per_node}")
 
-        if v.n_ranks:
+        if v.n_ranks and v.pbs_mpiexec_ppn:
+            # NCAR fork: Cray PALS (Derecho) documents -n, not -np, and places
+            # ranks per node only with --ppn.
+            cmd_opts.append(f"-n {v.n_ranks} --ppn {v.n_ranks_per_node}")
+        elif v.n_ranks:
             cmd_opts.append(f"-np {v.n_ranks}")
+        if v.pbs_mpiexec_wrapper:
+            # NCAR fork: after the launcher's options, so it wraps the application.
+            cmd_opts.append(v.pbs_mpiexec_wrapper)
 
         if v.n_threads_per_proc and v.n_threads_per_proc != 1:
             node_spec.append(f"ompthreads={v.n_threads_per_proc}")

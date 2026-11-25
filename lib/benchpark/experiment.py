@@ -498,6 +498,18 @@ class Experiment(ExperimentSystemBase, ExecMode, Affinity, Hwloc, Githash):
                 job_name += ".{workload_name}"
             self.add_experiment_variable("pbs_job_name", job_name)
 
+        # NCAR fork: GPU-aware MPI only for experiments that pass device buffers.
+        # A system that needs it (Derecho's cray-mpich) names a per-rank wrapper in
+        # gpu_mpi_wrapper and launcher options in gpu_mpi_cmd_opts.
+        system = getattr(getattr(self, "system_spec", None), "system", None)
+        if "cuda" in self.spec.variants and self.spec.satisfies("+cuda"):
+            wrapper = getattr(system, "gpu_mpi_wrapper", None)
+            if wrapper:
+                self.add_experiment_variable("pbs_mpiexec_wrapper", wrapper)
+            cmd_opts = getattr(system, "gpu_mpi_cmd_opts", None)
+            if cmd_opts:
+                self.add_experiment_variable("extra_cmd_opts", cmd_opts)
+
         if any([self.spec.satisfies(s) for s in ["+strong", "+weak", "+throughput"]]):
             self.expr_vars.extend(self.scale())
 
